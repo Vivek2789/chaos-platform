@@ -25,7 +25,7 @@ def hello():
 
     start_time = time.perf_counter()
     status = 200
-    body = "hello"
+    body = "hello world"
     
     REQUESTS.labels(endpoint="/hello", status=str(status)).inc()
     duration = time.perf_counter() - start_time
