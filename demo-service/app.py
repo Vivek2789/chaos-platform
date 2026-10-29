@@ -8,7 +8,7 @@ LATENCY = Histogram(
     "http_request_duration_seconds",
     "HTTP request latency in seconds",
     ["endpoint"],
-     buckets=[0.01, 0.025, 0.05, 0.1, 0.15, 0.18, 0.2, 0.4, 0.8, 1.6, 3.2],
+   buckets=[0.01, 0.025, 0.05, 0.1, 0.15, 0.18, 0.2, 0.25, 0.3, 0.4, 0.8, 1.6, 3.2]
 )
 
 REQUESTS = Counter(
