@@ -10,3 +10,8 @@ services:
       - "9090:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+  loadgen:
+    build: ./loadgen
+    environment:
+      - TARGET_URL=http://demo-service:8080/work
+      - RATE=10

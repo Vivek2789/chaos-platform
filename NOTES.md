@@ -34,8 +34,8 @@ A learning project: run controlled failure experiments against a demo service an
 | Milestone | What it builds | Status |
 |---|---|---|
 | 1 | Demo service that reports its own metrics | ✅ Done |
-| 2 | Dockerfile + Docker Compose with Prometheus | 🟡 In progress |
-| 3 | Load generator + Grafana dashboard | ⬜ |
+| 2 | Dockerfile + Docker Compose with Prometheus | ✅ Done |
+| 3 | Load generator + Grafana dashboard | 🟡 Next |
 | 4 | First fault: kill the container | ⬜ |
 | 5 | Second fault: latency injection (Toxiproxy) | ⬜ |
 | 6 | Platform: YAML experiments, auto-abort, reports | ⬜ |
@@ -102,7 +102,8 @@ for i in {1..100}; do curl -s -o /dev/null -w "%{http_code} %{time_total}\n" loc
 - Custom `buckets=[...]` **replace** the defaults entirely.
 - **Design buckets for your questions:** marks close together in the normal range, roughly doubling above it to see slowdowns. If every request lands in one bucket, the ruler is too blurry to measure anything.
 
-My buckets: `[0.01, 0.025, 0.05, 0.1, 0.15, 0.18, 0.2, 0.4, 0.8, 1.6, 3.2]`
+My buckets: `[0.01, 0.025, 0.05, 0.1, 0.15, 0.18, 0.2, 0.25, 0.3, 0.4, 0.8, 1.6, 3.2]`
+(`0.25` added for accurate p99 near the normal range; `0.3` added at the SLO threshold. See Milestone 2.)
 
 **Averages hide pain.** 99 requests at 0.1s + 1 at 10s averages 0.199s, which looks healthy while one user waited 10 seconds. Use **percentiles (p95/p99)** instead.
 
@@ -183,6 +184,50 @@ scrape_configs:
 - **Range rule of thumb:** at least **4× the scrape interval** (5s → `[20s]`+). Too short = noisy, with gaps; too long = slow to react and can hide short outages.
 - `rate()` treats any counter decrease as a **reset** and compensates, which is why counters must only go up.
 
+**p99 latency query.**
+```
+histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{endpoint="/work"}[1m])))
+```
+Read it from the inside out:
+1. bucket counters for `/work`
+2. `rate()` so only recent requests count
+3. `sum by (le)` merges extra labels (like `instance`) but keeps buckets separate
+4. `histogram_quantile(0.99, ...)` estimates the value 99% of requests are below (`0.5` = median)
+
+### Percentiles, buckets, and SLOs in practice
+
+**p99 is measured, not set.** Three separate things:
+
+| | What it is | Where it lives |
+|---|---|---|
+| 0.1–0.2s delay | how the app behaves | `app.py` |
+| Buckets | how finely we measure | `app.py` (`Histogram`) |
+| p99 ≈ 0.2s | the measured result | PromQL query |
+| p99 < 0.3s | the target (SLO) | experiment definitions (Milestone 6) |
+
+Thermometer analogy: actual temperature, the markings, the reading, and "I want it below 30 degrees."
+
+**Coarse buckets inflate percentiles.** `histogram_quantile` assumes requests are spread **evenly inside a bucket**. With marks at 0.2 and 0.4, the ~4% of requests just over 0.2s (really ~0.205s) were treated as spread across 0.2–0.4, so p99 showed **~0.35s**. Adding a `0.25` mark dropped it to **~0.20–0.25s**, close to reality. Same app, same traffic; only the ruler changed.
+
+**Put a bucket mark exactly at each SLO threshold.** Without a `0.3` mark, a p99 inside 0.25–0.4 can't be reliably judged above or below 0.3. With it, the SLO becomes an exact **count** instead of an estimate:
+```
+rate(http_request_duration_seconds_bucket{le="0.3"}[1m])
+/
+rate(http_request_duration_seconds_count[1m])
+```
+If this is ≥ 0.99, the SLO holds.
+
+**Changing buckets on a running system** causes a short messy period: right after a restart, the query window mixes old and new bucket layouts, and Prometheus warns that it fixed the input "for monotonicity." It clears after one window length. Change buckets rarely and deliberately.
+
+### Reading graphs
+
+- **Prometheus UI shows UTC** by default (New York is 4 hours behind during daylight saving time).
+- **"No data" is not zero.** With no traffic, error rate is 0 ÷ 0 and p99 has nothing to measure. Stacked mode draws these gaps along the bottom; Unstacked shows them more honestly.
+- **Warm-up:** a `rate(...[1m])` graph needs about a minute of steady traffic before it settles near the true value.
+- **Edge spikes:** when traffic stops, the window empties, so a few errors weigh heavily (my error rate jumped to 0.08 at the end of a burst).
+- **Wiggles** around the true value come from randomness in small samples. My error rate hovered at 0.05–0.065 around the expected 0.05.
+- **Bursty traffic makes baselines unreliable.** Chaos experiments need steady load, so a change in the line comes from the fault, not from traffic starting or stopping.
+
 ---
 
 ## Debugging lessons
@@ -202,8 +247,9 @@ scrape_configs:
 
 ## Next steps
 
-- [ ] Run the error-rate query and compare with the expected ~5%
+- [x] Run the error-rate query and compare with the expected ~5%
+- [x] Query p99 latency with `histogram_quantile()`
 - [ ] Experiment: remove `demo-service` `ports:` and check whether Prometheus still scrapes it
 - [ ] Experiment: set the target to `0.0.0.0:8080` and read the Targets error
-- [ ] Query p99 latency with `histogram_quantile()`
-- [ ] Milestone 3: load generator + Grafana dashboard
+- [ ] Milestone 3: load generator as a Compose service (steady traffic)
+- [ ] Milestone 3: Grafana dashboard with request rate, error rate, and p99
